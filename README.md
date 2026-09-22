@@ -3,20 +3,27 @@
 Two connected papers and one dashboard, built on a single shared data
 pipeline over real Deutsche Bahn delay data.
 
-1. **Paper 1 (main) — Station-level delay analysis.** Which stations and
-   routes are most affected by delays, when, and why — an applied
-   issues-and-solutions study: identify the worst-affected stations/routes,
-   characterize the patterns (time of day, train type, seasonality,
-   propagation from upstream stations), and propose concrete,
-   evidence-backed recommendations.
+1. **Paper 1 (main) — Station-level delay analysis + prediction model.**
+   Which stations and routes are most affected by delays, when, and why —
+   plus a predictive model that estimates major-delay risk. Three parts:
+   - **Delay category prediction (the main ML model)** — classify a given
+     train/station situation as On time / Minor delay / Major delay, and
+     output a probability of major delay rather than just a label.
+   - **Station Reliability Ranking** — a composite score per station from
+     average delay + cancellation rate, to answer: which stations create
+     delays, which recover quickly, which are bottlenecks.
+   - **Train Line Performance Analysis** — per `train_type`/`train_number`/
+     `line_number`: trip count, average delay, cancellation rate, worst
+     station on that line.
 2. **Paper 2 (secondary) — Evaluation leakage.** A shorter, methodological
    companion piece: naive random train/test splits silently inflate
    reported accuracy in delay-prediction models; quantified on the same
-   dataset, with a short audit of how existing literature reports its own
-   split methodology.
+   dataset (reusing the Paper 1 model as the test case), with a short
+   audit of how existing literature reports its own split methodology.
 3. **Dashboard.** A Streamlit app: a map of Germany showing delay
-   hotspots, station/route rankings, time trends — visualizing Paper 1's
-   findings directly — plus a panel showing Paper 2's leakage result.
+   hotspots, the station reliability ranking, train-line performance
+   pages, an interactive "predict my train's delay risk" panel (the
+   model from Paper 1), and a panel showing Paper 2's leakage result.
 
 All pipeline code is written from scratch as part of this project —
 no external ML pipelines or boilerplate templates.
@@ -36,18 +43,33 @@ uv run --with "huggingface-hub" hf download piebro/deutsche-bahn-data \
 **Known caveats** (from the dataset's own README — matter for the analysis,
 both papers, and the dashboard):
 - Full station coverage only from **2025-11-02** onward; before that, only
-  the ~100 biggest stations are included. "Most affected stations" claims
-  must state which coverage regime they're computed over.
+  the ~100 biggest stations are included. "Most affected stations" and
+  reliability-score claims must state which coverage regime they're
+  computed over.
 - Documented collection gaps (~98.9% file-level coverage overall) —
   missing hours are NOT the same as "no train ran" — don't let gaps read
-  as artificially low delay for a station/period.
+  as artificially low delay/cancellation for a station or line.
 - Timestamps are naive local time (Europe/Berlin) — watch DST transitions.
 - `line_number` is null for long-distance trains (ICE/IC/EC); only
-  populated for regional services.
+  populated for regional services — the train-line analysis needs to
+  handle these two cases separately (group ICE/IC by `train_number`
+  instead).
 
 Station coordinates (for the dashboard map) come from
 [trainline-eu/stations](https://github.com/trainline-eu/stations),
 joined on `db_id` == the dataset's `eva` column.
+
+## `delay_category` definition (used throughout)
+
+| `delay_in_min` | Category |
+|---|---|
+| 0–5 | On time |
+| 6–15 | Minor delay |
+| >15 | Major delay |
+
+Cancellations (`is_canceled`) are tracked as a separate flag, not folded
+into this scale — a cancellation isn't "infinite delay," it's a different
+failure mode with its own rate.
 
 ## Folder structure
 
@@ -63,13 +85,17 @@ db-delay-project/
 │   ├── cleaning.py
 │   ├── features.py                # time-safe feature engineering
 │   ├── split.py                   # naive random split vs time-based split (paper 2)
-│   ├── model.py
-│   └── evaluate.py                # MAE/RMSE, bootstrap CI, significance test
+│   ├── model.py                   # delay_category classifier
+│   ├── reliability_score.py       # station reliability scoring formula
+│   └── evaluate.py                # metrics, bootstrap CI, significance test
 ├── analysis/
-│   ├── 01_station_rankings.py     # worst-affected stations/routes
+│   ├── 01_station_rankings.py     # station reliability score + rankings
 │   ├── 02_temporal_patterns.py    # time-of-day, weekday, seasonality
 │   ├── 03_propagation_analysis.py # upstream-delay effects
+│   ├── 04_train_line_performance.py  # per train_type/number/line stats
 │   └── results/                   # saved tables/figures — evidence for paper 1
+├── models/
+│   └── delay_category_model/      # trained classifier + evaluation report
 ├── experiments/
 │   ├── 01_leakage_comparison.py   # naive vs. correct split (paper 2's core result)
 │   ├── 02_seed_robustness.py
@@ -88,7 +114,13 @@ db-delay-project/
 │       └── paper.md
 ├── dashboard/
 │   ├── app.py
-│   ├── components/                # map_view, rankings, trends, leakage_panel
+│   ├── components/
+│   │   ├── map_view.py            # delay hotspot map
+│   │   ├── station_reliability.py # reliability ranking table
+│   │   ├── train_line_performance.py
+│   │   ├── delay_risk_predictor.py # interactive delay_category prediction
+│   │   ├── trends.py
+│   │   └── leakage_panel.py
 │   └── data_prep.py
 ├── tests/
 ├── .gitignore
@@ -127,36 +159,48 @@ once data is filtered down to a working size.
       delay distribution, cancellation rate, missing values, duplicate
       ids, spot-check a single train's route)
 - [ ] Cleaning step
-- [ ] Station/route delay rankings (Paper 1 core result)
+- [ ] `delay_category` labeling + class balance check
+- [ ] Station Reliability Ranking (score formula, per-station table)
+- [ ] Train Line Performance Analysis (per type/number/line table)
 - [ ] Temporal pattern analysis (time-of-day, weekday, season)
 - [ ] Propagation analysis (upstream-station effects)
 - [ ] Time-safe feature engineering
-- [ ] Naive vs. correct split comparison (Paper 2 core result)
+- [ ] Delay category classifier (main ML model) — trained + evaluated
+- [ ] Naive vs. correct split comparison (Paper 2 core result, reusing the
+      classifier above as the test case)
 - [ ] Seed robustness + statistical significance (Paper 2)
 - [ ] Literature split-protocol audit table (Paper 2)
-- [ ] Dashboard (map, rankings, trends, leakage panel)
+- [ ] Dashboard (map, reliability ranking, train-line pages, delay-risk
+      predictor, trends, leakage panel)
 - [ ] Paper 1 writeup
 - [ ] Paper 2 writeup
 
 ## Roadmap
 
-**Phase 1 — Ground Paper 1.** Explore the real data, clean it, compute
-station/route delay rankings and temporal patterns. This is the main
-paper's evidence and doesn't depend on anything else being built first.
+**Phase 1 — Ground Paper 1's descriptive side.** Explore and clean the
+real data, define `delay_category`, compute the Station Reliability Score
+and Train Line Performance tables. This is evidence that doesn't depend
+on any model existing yet.
 
-**Phase 2 — Propagation + solutions.** Analyze upstream-delay effects,
-turn the findings into concrete, evidence-backed recommendations
-(the "solutions" half of Paper 1).
+**Phase 2 — The prediction model.** Time-safe features, train the
+delay-category classifier, evaluate properly (per-class precision/recall,
+not just accuracy — classes are imbalanced since major delays are rarer).
+This is the main ML deliverable.
 
-**Phase 3 — Paper 2 (leakage).** Build the naive-vs-correct split
-comparison on the same cleaned data, add bootstrap CI/significance
-testing, and the literature audit table.
+**Phase 3 — Propagation + solutions.** Analyze upstream-delay effects,
+turn the rankings + model findings into concrete, evidence-backed
+recommendations (the "solutions" half of Paper 1).
 
-**Phase 4 — Dashboard.** Map, station/route rankings, time trends
-(Paper 1), and a panel visualizing the leakage result (Paper 2).
+**Phase 4 — Paper 2 (leakage).** Reuse the Phase 2 classifier: compare
+naive-random vs. correct time-based split on it, add bootstrap CI/
+significance testing, and the literature audit table.
 
-**Phase 5 — Write-up.** Both papers, using only numbers that trace back
-to saved files in `analysis/results/` and `experiments/results/`.
+**Phase 5 — Dashboard.** Map, reliability ranking, train-line performance
+pages, interactive delay-risk predictor (Phase 2's model), trends, and the
+leakage panel (Phase 4's result).
+
+**Phase 6 — Write-up.** Both papers, using only numbers that trace back
+to saved files in `analysis/results/`, `models/`, or `experiments/results/`.
 
 ## Notes to self
 
@@ -164,8 +208,15 @@ to saved files in `analysis/results/` and `experiments/results/`.
   running against a full month.
 - Never commit raw or processed data to git.
 - Every number that ends up in either paper should trace back to a saved
-  file in `analysis/results/` or `experiments/results/`, not just
-  terminal output.
+  file, not just terminal output.
 - State the coverage regime (pre/post 2025-11-02) explicitly whenever
-  comparing stations — otherwise "most affected" rankings are comparing
-  apples to oranges.
+  comparing stations or lines — otherwise rankings compare apples to
+  oranges.
+- `delay_category` classes are almost certainly imbalanced (most trains
+  are on time or slightly late; major delays are rare) — accuracy alone
+  will be misleading; use precision/recall/F1 per class, and consider
+  class weighting.
+- Decide the Station Reliability Score formula deliberately and document
+  it (e.g. weighted combination of avg delay + cancellation rate,
+  normalized) — write down the exact formula before computing it so it's
+  reproducible and defensible in the paper.
