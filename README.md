@@ -1,4 +1,4 @@
-# DB Delay Prediction — Evaluation Leakage in Train Delay Forecasting
+# db-delay-leakage — Evaluation Leakage in Train Delay Forecasting
 
 A German-railway case study showing that naive (random) train/test splits
 silently inflate reported accuracy in delay-prediction models, with a
